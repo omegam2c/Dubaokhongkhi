@@ -1,0 +1,55 @@
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv1D, MaxPooling1D, Bidirectional, LSTM, Dense, Dropout, Layer
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers.schedules import CosineDecay
+import tensorflow.keras.backend as K
+
+print(" CELL 1: KHỞI TẠO KIẾN TRÚC CNN-BiLSTM-ATTENTION ")
+
+# 1. Định nghĩa lớp Attention tùy chỉnh
+class TemporalAttention(Layer):
+    def __init__(self, **kwargs):
+        super(TemporalAttention, self).__init__(**kwargs)
+
+    def build(self, input_shape):
+        self.W = self.add_weight(name='attention_weight', shape=(input_shape[-1], 1),
+                                 initializer='glorot_uniform', trainable=True)
+        self.b = self.add_weight(name='attention_bias', shape=(input_shape[1], 1),
+                                 initializer='zeros', trainable=True)
+        super(TemporalAttention, self).build(input_shape)
+
+    def call(self, x):
+        e = K.tanh(K.dot(x, self.W) + self.b)
+        a = K.softmax(e, axis=1)
+        output = x * a
+        return K.sum(output, axis=1)
+
+# 2. Xây dựng Kiến trúc mạng Neural
+# Lưu ý: X_train đã được tạo từ bước Tiền xử lý Toàn cục trước đó
+input_layer = Input(shape=(X_train.shape[1], X_train.shape[2]))
+
+# Trích xuất đặc trưng cục bộ (CNN)
+x = Conv1D(filters=64, kernel_size=3, activation='relu', padding='same')(input_layer)
+x = MaxPooling1D(pool_size=2)(x)
+x = Dropout(0.2)(x)
+
+# Học phụ thuộc chuỗi dài 2 chiều (BiLSTM)
+x = Bidirectional(LSTM(64, return_sequences=True))(x)
+x = Dropout(0.2)(x)
+
+# Cơ chế tập trung vào thời điểm quan trọng (Attention)
+x = TemporalAttention()(x)
+
+# Hồi quy đầu ra (Dense)
+x = Dense(32, activation='relu')(x)
+x = Dropout(0.2)(x)
+output_layer = Dense(1, activation='linear')(x)
+
+model_super = Model(inputs=input_layer, outputs=output_layer)
+
+# 3. Biên dịch mô hình với Cosine Decay
+lr_schedule = CosineDecay(0.001, 100 * (len(X_train) // 64))
+model_super.compile(optimizer=Adam(learning_rate=lr_schedule), loss='mse', metrics=['mae'])
+
+model_super.summary()
