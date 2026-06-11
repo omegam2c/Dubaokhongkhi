@@ -289,7 +289,7 @@ def preprocess_csv_data(df):
     if 'PM1' not in df.columns and 'PM2.5' in df.columns:
         df['PM1'] = df['PM2.5'] * 0.7
     if 'UM003' not in df.columns and 'PM2.5' in df.columns:
-        df['UM003'] = df['PM2.5'] * 0.6
+        df['UM003'] = df['PM2.5'] * 39.7
         
     # Điền 0 cho các cột còn thiếu khác để tránh lỗi IndexError
     for f in FEATURES:
@@ -305,8 +305,9 @@ COORDS = {
 }
 
 def get_open_meteo_data(lat, lon):
-    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days=1"
-    air_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly=pm2_5&past_days=1"
+    # Thêm timezone=auto và điều chỉnh past_days/forecast_days để có đủ dữ liệu quá khứ và hiện tại
+    weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days=2&forecast_days=1&timezone=auto"
+    air_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly=pm2_5&past_days=2&forecast_days=1&timezone=auto"
     
     weather_resp = requests.get(weather_url)
     air_resp = requests.get(air_url)
@@ -323,17 +324,28 @@ def get_open_meteo_data(lat, lon):
     a_hourly = air_resp.get('hourly', {})
     
     df = pd.DataFrame({
-        'Temperature': w_hourly.get('temperature_2m', [0]*24)[-24:],
-        'Relative_Humidity': w_hourly.get('relative_humidity_2m', [0]*24)[-24:],
-        'Wind_Speed': w_hourly.get('wind_speed_10m', [0]*24)[-24:],
-        'PM2.5': a_hourly.get('pm2_5', [0]*24)[-24:],
-        'time': w_hourly.get('time', [datetime.datetime.now().isoformat()]*24)[-24:]
+        'Temperature': w_hourly.get('temperature_2m', []),
+        'Relative_Humidity': w_hourly.get('relative_humidity_2m', []),
+        'Wind_Speed': w_hourly.get('wind_speed_10m', []),
+        'PM2.5': a_hourly.get('pm2_5', []),
+        'time': w_hourly.get('time', [])
     })
+    
+    if df.empty:
+        raise Exception("Không có dữ liệu trả về từ API")
+        
+    df['time'] = pd.to_datetime(df['time'])
+    
+    # Lọc lấy đúng 24 giờ tính từ giờ hiện tại lùi về trước (Tránh lấy nhầm dự báo tương lai)
+    now = datetime.datetime.now()
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    
+    df = df[df['time'] <= current_hour]
+    df = df.tail(24).copy()
     
     df['PM1'] = df['PM2.5'] * 0.7
     df['UM003'] = df['PM2.5'] * 0.6
     
-    df['time'] = pd.to_datetime(df['time'])
     df['hour_sin'] = np.sin(2 * np.pi * df['time'].dt.hour / 24)
     df['hour_cos'] = np.cos(2 * np.pi * df['time'].dt.hour / 24)
     df['month_sin'] = np.sin(2 * np.pi * df['time'].dt.month / 12)
@@ -407,18 +419,33 @@ def render_pm_legend():
 
 # Đã gỡ bỏ hàm get_empirical_metrics và render_evaluation_table theo yêu cầu
 
-def render_hourly_forecast(predictions, df_input, h_steps):
+def render_hourly_forecast(predictions, df_input, h_steps, timestamps=None):
     st.markdown("### Dự báo theo giờ")
     st.markdown("Dự báo mức độ PM2.5 trong các giờ tới")
     
     render_pm_legend()
     
-    now = datetime.datetime.now()
     html = '<div class="hourly-forecast-container">'
     
+    if timestamps is None:
+        now = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
+        times_to_display = [now + datetime.timedelta(hours=i+1) for i in range(len(predictions))]
+    else:
+        times_to_display = timestamps
+        
     for i, pred in enumerate(predictions):
-        future_time = now + datetime.timedelta(hours=i+1)
-        time_str = future_time.strftime("%H:00")
+        future_time = times_to_display[i]
+        
+        if isinstance(future_time, (int, float, np.integer)):
+            time_str = f"H+{future_time}"
+        elif isinstance(future_time, str):
+            try:
+                time_str = pd.to_datetime(future_time).strftime("%H:%M")
+            except:
+                time_str = str(future_time)
+        else:
+            time_str = pd.to_datetime(future_time).strftime("%H:%M")
+            
         color_class, label = get_pm_status(pred)
         
         html += f"<div class='hourly-card'>" \
@@ -456,7 +483,7 @@ with st.sidebar:
 st.title("🌍 Dashboard Dự báo Ô nhiễm Không khí")
 st.markdown("Đo lường và dự báo bụi mịn PM2.5 cho các khu vực tại Hà Nội.")
 
-tabs = st.tabs(["🌐 Dự báo Thực tế", "📈 Đánh giá Mô hình (Backtest)"])
+tabs = st.tabs(["🌐 Dự báo Thực tế", "📈 Đánh giá Mô hình"])
 
 # ---------------------------------------------------------
 # TAB 1: DỰ BÁO THỰC TẾ
@@ -714,11 +741,12 @@ with tabs[1]:
         
         st.markdown("---")
         # 3. HOURLY FORECAST & HEALTH RECOMMENDATIONS
-        # Lấy 15 giá trị dự báo cuối cùng để hiển thị (tương đương 15 giờ)
-        last_predictions = dist_df['Dự báo'].tail(15).tolist()
+        # Lấy số giá trị dự báo cuối cùng bằng h_steps (thay cho 15)
+        last_predictions = dist_df['Dự báo'].tail(h_steps).tolist()
+        last_timestamps = dist_df['Thời gian'].tail(h_steps).tolist()
         
         if len(last_predictions) > 0:
-            render_hourly_forecast(last_predictions, None, len(last_predictions))
+            render_hourly_forecast(last_predictions, None, len(last_predictions), timestamps=last_timestamps)
             
             st.markdown("---")
             max_pm = max(last_predictions)
