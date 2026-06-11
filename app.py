@@ -308,8 +308,16 @@ def get_open_meteo_data(lat, lon):
     weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m&past_days=1"
     air_url = f"https://air-quality-api.open-meteo.com/v1/air-quality?latitude={lat}&longitude={lon}&hourly=pm2_5&past_days=1"
     
-    weather_resp = requests.get(weather_url).json()
-    air_resp = requests.get(air_url).json()
+    weather_resp = requests.get(weather_url)
+    air_resp = requests.get(air_url)
+    
+    if weather_resp.status_code != 200:
+        raise Exception(f"Lỗi API Thời tiết ({weather_resp.status_code}): Quá tải hoặc bị chặn")
+    if air_resp.status_code != 200:
+        raise Exception(f"Lỗi API Không khí ({air_resp.status_code}): Quá tải hoặc bị chặn")
+        
+    weather_resp = weather_resp.json()
+    air_resp = air_resp.json()
     
     w_hourly = weather_resp.get('hourly', {})
     a_hourly = air_resp.get('hourly', {})
