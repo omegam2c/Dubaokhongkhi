@@ -6,6 +6,10 @@ import altair as alt
 import datetime
 import math
 import requests
+import datetime
+
+# Thiết lập múi giờ Việt Nam (UTC+7)
+VN_TZ = datetime.timezone(datetime.timedelta(hours=7))
 
 try:
     import tensorflow as tf
@@ -228,7 +232,7 @@ def get_pm_status(pm25_val):
     else: return "pm-level-6", "Nguy hại"
 
 def generate_dummy_data():
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(VN_TZ).replace(tzinfo=None)
     data = []
     for i in range(SEQ_LENGTH):
         t = now - datetime.timedelta(hours=SEQ_LENGTH - i)
@@ -277,7 +281,7 @@ def preprocess_csv_data(df):
             dt_series = pd.to_datetime(df[time_col])
         else:
             # Tạo chuỗi thời gian giả lập tính từ hiện tại lùi về trước
-            now = datetime.datetime.now()
+            now = datetime.datetime.now(VN_TZ).replace(tzinfo=None)
             dt_series = pd.Series([now + datetime.timedelta(hours=i) for i in range(len(df))])
             
         if 'hour_sin' not in df.columns: df['hour_sin'] = np.sin(2 * np.pi * dt_series.dt.hour / 24)
@@ -337,7 +341,7 @@ def get_open_meteo_data(lat, lon):
     df['time'] = pd.to_datetime(df['time'])
     
     # Lọc lấy đúng 24 giờ tính từ giờ hiện tại lùi về trước (Tránh lấy nhầm dự báo tương lai)
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(VN_TZ).replace(tzinfo=None)
     current_hour = now.replace(minute=0, second=0, microsecond=0)
     
     df = df[df['time'] <= current_hour]
@@ -428,7 +432,7 @@ def render_hourly_forecast(predictions, df_input, h_steps, timestamps=None):
     html = '<div class="hourly-forecast-container">'
     
     if timestamps is None:
-        now = datetime.datetime.now().replace(minute=0, second=0, microsecond=0)
+        now = datetime.datetime.now(VN_TZ).replace(tzinfo=None).replace(minute=0, second=0, microsecond=0)
         times_to_display = [now + datetime.timedelta(hours=i+1) for i in range(len(predictions))]
     else:
         times_to_display = timestamps
